@@ -1,10 +1,3 @@
-#define STEERMIDDLE 73
-#define STEERMIN 1
-#define STEERMAX 10000
-
-#define SYSTICKS_PER_SECOND     1000
-#define TIMEOUT 240
-
 #include "xhw_types.h"
 #include "xhw_memmap.h"
 #include "xspi.h"
@@ -15,8 +8,16 @@
 #include "xcore.h"
 #include "xpwm.h"
 #include "xwdt.h"
+/*#include "xhw_uart.h"
+#include "xuart.h"*/
 
 #include <stdint.h>
+
+/*void printstring(char * data){
+	while (*data != '\0') {
+		UARTCharPut(UART0_BASE,*data++);
+	}
+}*/
 
 #ifdef __cplusplus
 extern "C" {
@@ -85,6 +86,94 @@ void stopall(){
 	xPWMDutySetPrec(xPWMA_BASE, xPWM_CHANNEL1,750);
 }
 
+#define STEERRANGE 200
+#define STEERMIDDLE 750
+#define SYSTICKS_PER_SECOND     1000
+#define TIMEOUT 240
+
+static unsigned middle=STEERMIDDLE;
+
+
+void sendStatus(report_t& gamepad_report, RF24& radio) {
+		// Delay just a little bit to let the other unit
+		// make the transition to receiver
+		xSysCtlDelay(ulClockMS * 10);
+
+		radio.stopListening();
+		uint8_t response = 0;
+		radio.write(&response, sizeof(uint8_t));
+		radio.startListening();
+}
+
+
+#define DELTATIME 100
+void calibrate(RF24& radio) {
+	bool finished = false;
+
+	xPWMDutySetPrec(xPWMA_BASE, xPWM_CHANNEL1, middle);
+	
+	unsigned long timestartright;
+	unsigned long timestartleft;
+
+	bool rightdown = false;
+	bool leftdown = false;
+	
+
+	do{
+
+		// if there is data ready
+		if (radio.available()) {
+
+			report_t gamepad_report;
+			bool done = false;
+
+			while (!done) {
+
+				done = radio.read(&gamepad_report, sizeof(report_t));
+
+				if (RIGHT_PRESSED(gamepad_report)){
+					if(rightdown){
+						if ((millis()-timestartright)>DELTATIME){
+							middle++;
+						}
+					}else{
+						rightdown=true;
+						timestartright=millis();
+					}
+				}else{
+					rightdown=false;
+				}
+
+
+				if (LEFT_PRESSED(gamepad_report)){
+					if(leftdown){
+						if ((millis()-timestartleft)>DELTATIME){
+							middle--;
+						}
+					}else{
+						leftdown=true;
+						timestartleft=millis();
+					}
+				}else{
+					leftdown=false;
+				}
+
+				xPWMDutySetPrec(xPWMA_BASE, xPWM_CHANNEL1, middle);
+
+				//finish
+				if (START_PRESSED(gamepad_report)){
+					finished=true;
+				}
+
+				//send status if needed
+				if (gamepad_report.reportid == 1) {
+					sendStatus(gamepad_report, radio);
+				}
+			}
+
+		}
+	}while(!finished);
+}
 
 int main() {
 
@@ -94,11 +183,23 @@ int main() {
 	WDTimerDisable();
 
 	xSysCtlClockSet32KhzFLLExt(); //48mhz from 32768khz external clock
+	xSysCtlDelay(100000);
+
 
 	xSysTickPeriodSet(xSysCtlClockGet()/SYSTICKS_PER_SECOND); //1ms
 	xSysTickIntEnable();
 	xSysTickEnable(); // End of SysTick init
 	ulClockMS = xSysCtlClockGet() / (3 * 1000);
+
+	//enable uart
+	/*xSysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
+	xSysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOB);
+	xSPinTypeUART(UART0RX, PB2);
+    xSPinTypeUART(UART0TX, PB1);
+    SysCtlPeripheralClockSourceSet(SYSCTL_PERIPH_UART0_S_MCGPLLCLK_2);
+    UARTDisable(UART0_BASE, UART_TX | UART_RX);
+    UARTConfigSet(UART0_BASE, 115200, UART_CONFIG_SAMPLE_RATE_15 | UART_CONFIG_WLEN_8 | UART_CONFIG_PAR_NONE | UART_CONFIG_STOP_1);
+    UARTEnable(UART0_BASE, UART_TX | UART_RX);*/
 
 	pwmInit();
 
@@ -110,44 +211,45 @@ int main() {
 
 		// if there is data ready
 		if (radio.available()) {
+
 			report_t gamepad_report;
 			bool done = false;
+
 			while (!done) {
-				// Fetch the payload, and see if this was the last one.
+
 				done = radio.read(&gamepad_report, sizeof(report_t));
+				int x = (int8_t)(gamepad_report.x);
+				int y = (int8_t)(gamepad_report.y);
+				int rx = (int8_t)(gamepad_report.rx);
+				int ry = (int8_t)(gamepad_report.ry);
 
-				int x = (int8_t) gamepad_report.x;
-				int y = (int8_t) gamepad_report.y;
-				int rx = (int8_t) gamepad_report.rx;
-				int ry = (int8_t) gamepad_report.ry;
-
-				unsigned int  pos = 750;
-				if (x > 0){
-					pos = map(x, 1, 127, 750, 900);
+				if (X_PRESSED(gamepad_report) && Y_PRESSED(gamepad_report)){
+					//printstring("calibrating\n");
+					calibrate(radio);
+					break;
 				}
-				else if (x < 0){
-					pos = map(-x, 1, 127, 750, 600);
-				}
-				xPWMDutySetPrec(xPWMA_BASE, xPWM_CHANNEL1,pos );
 
-				//servo_setPosition(pos);
-				unsigned int  speed=750;
-				if (ry > 0){
-					speed = map(ry, 1, 127, 600, 100);
-				}else if (ry < 0){
-					speed = map(-ry, 1, 127, 900, 1300);
+				//steering (servo)
+				unsigned int pos = middle;
+				if (x > 0) {
+					pos = map(x, 1, 127, middle + 1, middle + STEERRANGE);
+				} else if (x < 0) {
+					pos = map(-x, 1, 127, middle - 1, middle - STEERRANGE);
 				}
-				xPWMDutySetPrec(xPWMA_BASE, xPWM_CHANNEL0,speed );
+				xPWMDutySetPrec(xPWMA_BASE, xPWM_CHANNEL1, pos);
 
+				//speed (esc)
+				unsigned int speed = 750;
+				if (ry > 0) {
+					speed = map(ry, 1, 127, 749, 250);
+				} else if (ry < 0) {
+					speed = map(-ry, 1, 127, 751, 1250);
+				}
+				xPWMDutySetPrec(xPWMA_BASE, xPWM_CHANNEL0, speed);
+
+				//send status if needed
 				if (gamepad_report.reportid == 1) {
-					// Delay just a little bit to let the other unit
-					// make the transition to receiver
-					xSysCtlDelay(ulClockMS * 10);
-
-					radio.stopListening();
-					uint8_t response = 0;
-					radio.write(&response, sizeof(uint8_t));
-					radio.startListening();
+					sendStatus(gamepad_report, radio);
 				}
 			}
 
@@ -159,8 +261,12 @@ int main() {
 				xSysCtlDelay(ulClockMS * 10);
 			}
 		}
+
+
+
 	}
 
 	return 0;
+
 }
 

@@ -7,6 +7,16 @@
 #include <stdio.h>
 #include <stdarg.h>
 
+#include "xhw_types.h"
+#include "xhw_memmap.h"
+#include "xdebug.h"
+#include "xsysctl.h"
+#include "xhw_sysctl.h"
+#include "xhw_gpio.h"
+#include "xgpio.h"
+#include "xhw_uart.h"
+#include "xuart.h"
+
 
 /**
  * @brief  Transmit a char, if you want to use printf(), 

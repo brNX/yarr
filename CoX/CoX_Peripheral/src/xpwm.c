@@ -722,7 +722,7 @@ PWMFrequencyGet(unsigned long ulBase)
     ulPreScale = 1 << i;
     usCNRData = xHWREG(ulBase + TPM_MOD);
     
-    return(SysCtlPWMAndUART0ClkGet() / usCNRData / ulPreScale);
+    return(SysCtlPWMClkGet() / usCNRData / ulPreScale);
 }
 
 //*****************************************************************************
